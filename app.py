@@ -30,7 +30,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATA_FILE = "Final_Priority_Total.shp"
+DATA_FILE = "Final_Priority_Total.gpkg"
+DATA_LAYER = "Final_Priority_Total"
 
 # Friendly name -> actual field in Final_Priority_Total
 FIELD_MAP = {
@@ -113,10 +114,21 @@ st.markdown(
 
 @st.cache_data(show_spinner="Loading Final_Priority_Total...")
 def load_data(path):
-    gdf = gpd.read_file(path)
+    # GeoPackage is preferred for deployment because all GIS components
+    # are stored in one file. Shapefile is still supported as a fallback.
+    if path.lower().endswith(".gpkg"):
+        gdf = gpd.read_file(path, layer=DATA_LAYER)
+    else:
+        gdf = gpd.read_file(path)
+
+    # Make sure the GeoDataFrame has an explicit geometry column.
+    if "geometry" not in gdf.columns:
+        raise ValueError("The dataset does not contain a geometry column.")
+    gdf = gdf.set_geometry("geometry")
 
     # Standardize field names to upper case.
     gdf.columns = [str(c).upper() for c in gdf.columns]
+    gdf = gdf.set_geometry("GEOMETRY")
 
     # Convert numeric fields.
     for field in FIELD_MAP.values():
@@ -157,16 +169,23 @@ def load_data(path):
 
 
 def find_data_file():
+    base = os.path.dirname(os.path.abspath(__file__))
     candidates = [
-        DATA_FILE,
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), DATA_FILE),
+        os.path.join(base, DATA_FILE),
+        os.path.join(base, "data", DATA_FILE),
         os.path.join(os.getcwd(), DATA_FILE),
-        os.path.join("data", DATA_FILE),
     ]
 
-    for p in candidates:
-        if os.path.exists(p):
-            return p
+    # Fallback to the original shapefile if the GeoPackage is not present.
+    candidates += [
+        os.path.join(base, "Final_Priority_Total.shp"),
+        os.path.join(base, "data", "Final_Priority_Total.shp"),
+        os.path.join(os.getcwd(), "Final_Priority_Total.shp"),
+    ]
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
 
     return None
 
@@ -175,8 +194,9 @@ DATA_PATH = find_data_file()
 
 if DATA_PATH is None:
     st.error(
-        "Final_Priority_Total.shp was not found. Put the complete shapefile "
-        "set (.shp, .shx, .dbf, .prj and .cpg) in the same folder as app.py."
+        "Final_Priority_Total.gpkg was not found. Put Final_Priority_Total.gpkg "
+        "in the same folder as app.py. The original shapefile is also supported "
+        "as a fallback."
     )
     st.stop()
 

@@ -121,14 +121,24 @@ def load_data(path):
     else:
         gdf = gpd.read_file(path)
 
-    # Make sure the GeoDataFrame has an explicit geometry column.
-    if "geometry" not in gdf.columns:
-        raise ValueError("The dataset does not contain a geometry column.")
-    gdf = gdf.set_geometry("geometry")
+    # Keep the active geometry column name intact.
+    # IMPORTANT: do not blindly uppercase the geometry column.
+    # In GeoPandas the active-geometry metadata must continue to point
+    # to the real geometry column; otherwise accessing .crs can fail.
+    if gdf.geometry is None or gdf.geometry.name not in gdf.columns:
+        raise ValueError("The dataset does not contain an active geometry column.")
 
-    # Standardize field names to upper case.
-    gdf.columns = [str(c).upper() for c in gdf.columns]
-    gdf = gdf.set_geometry("GEOMETRY")
+    geometry_col = gdf.geometry.name
+
+    # Standardize only the attribute field names to upper case.
+    # Keep geometry_col unchanged (normally 'geometry').
+    rename_map = {
+        c: str(c).upper()
+        for c in gdf.columns
+        if c != geometry_col
+    }
+    gdf = gdf.rename(columns=rename_map)
+    gdf = gdf.set_geometry(geometry_col)
 
     # Convert numeric fields.
     for field in FIELD_MAP.values():
@@ -365,8 +375,17 @@ def make_map(data, selected_cluster=None, height=600):
         labels=True,
     )
 
+    # Folium serializes GeoDataFrame attributes to JSON. Some pandas/NumPy
+    # scalar types (for example numpy.int64) are not JSON serializable when
+    # the GeoDataFrame is passed directly. Convert only the fields needed by
+    # the map to a GeoJSON string first; GeoPandas handles the scalar types
+    # correctly during to_json(). This also keeps the map payload smaller.
+    map_columns = popup_fields + [show.geometry.name]
+    map_data = show[map_columns].copy()
+    map_geojson = map_data.to_json(drop_id=True)
+
     folium.GeoJson(
-        show,
+        map_geojson,
         name="Watershed clusters",
         tooltip=tooltip,
         style_function=map_style,
@@ -383,8 +402,19 @@ def make_map(data, selected_cluster=None, height=600):
         ].copy()
 
         if not selected.empty:
+            selected_fields = [
+                "CLUSTER",
+                "DISTRICT",
+                "TALUKA",
+                "AREA_HA",
+                "FIN_PRI",
+                selected.geometry.name,
+            ]
+            selected_map_data = selected[selected_fields].copy()
+            selected_geojson = selected_map_data.to_json(drop_id=True)
+
             folium.GeoJson(
-                selected,
+                selected_geojson,
                 name="Selected project",
                 style_function=lambda feature: {
                     "fillColor": "#ffff00",
